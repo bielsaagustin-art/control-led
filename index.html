@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Control LED</title>
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1419; --card: #1a2129; --borde: #2a333d; --texto: #e6edf3;
+    --sub: #8b98a5; --on: #3fd97f; --off: #4a5560; --acento: #6c8cff; --error: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--texto);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; justify-content: center; padding: 24px 16px;
+  }
+  main { width: 100%; max-width: 380px; }
+  h1 { font-size: 1.3rem; margin: 0 0 4px; }
+  .sub { color: var(--sub); font-size: .85rem; margin: 0 0 20px; }
+  .card {
+    background: var(--card); border: 1px solid var(--borde);
+    border-radius: 14px; padding: 20px; margin-bottom: 16px;
+  }
+  label { display: block; font-size: .8rem; color: var(--sub); margin: 12px 0 4px; }
+  input {
+    width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid var(--borde);
+    background: var(--bg); color: var(--texto); font-size: 1rem;
+  }
+  button {
+    width: 100%; padding: 12px; border: 0; border-radius: 8px; font-size: 1rem;
+    font-weight: 600; cursor: pointer; margin-top: 16px;
+  }
+  .primario { background: var(--acento); color: #fff; }
+  .secundario { background: transparent; color: var(--sub); border: 1px solid var(--borde); }
+  button:disabled { opacity: .5; cursor: default; }
+
+  .estado-con { display: flex; align-items: center; gap: 8px; font-size: .85rem; color: var(--sub); }
+  .punto { width: 10px; height: 10px; border-radius: 50%; background: var(--off); }
+  .punto.ok { background: var(--on); box-shadow: 0 0 8px var(--on); }
+  .punto.err { background: var(--error); }
+
+  .led-wrap { display: flex; flex-direction: column; align-items: center; padding: 10px 0; }
+  .led {
+    width: 110px; height: 110px; border-radius: 50%; background: var(--off);
+    border: 4px solid var(--borde); transition: all .25s;
+  }
+  .led.on { background: var(--on); box-shadow: 0 0 40px var(--on); border-color: #7cf0a8; }
+  .led-txt { margin-top: 12px; font-size: .95rem; color: var(--sub); }
+  .botones { display: flex; gap: 10px; }
+  .botones button { margin-top: 18px; }
+  .b-on { background: var(--on); color: #062b14; }
+  .b-off { background: var(--off); color: #fff; }
+
+  #log {
+    font-family: ui-monospace, Consolas, monospace; font-size: .75rem; color: var(--sub);
+    max-height: 140px; overflow-y: auto; white-space: pre-wrap; margin: 0;
+  }
+  .error-msg { color: var(--error); font-size: .85rem; margin-top: 10px; min-height: 1em; }
+  .oculto { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>💡 Control LED</h1>
+  <p class="sub">Domótica + ciberseguridad · MQTT sobre TLS</p>
+
+  <!-- Login -->
+  <section id="login" class="card">
+    <div class="estado-con"><span class="punto"></span> Desconectado</div>
+    <label for="usuario">Usuario</label>
+    <input id="usuario" value="app_agustin" autocomplete="username">
+    <label for="clave">Contraseña</label>
+    <input id="clave" type="password" autocomplete="current-password">
+    <button id="btnConectar" class="primario">Conectar</button>
+    <div id="errorLogin" class="error-msg"></div>
+  </section>
+
+  <!-- Panel -->
+  <section id="panel" class="oculto">
+    <div class="card">
+      <div class="estado-con"><span id="puntoCon" class="punto ok"></span> <span id="txtCon">Conectado al broker</span></div>
+      <div class="led-wrap">
+        <div id="led" class="led"></div>
+        <div id="ledTxt" class="led-txt">Esperando estado de la placa…</div>
+      </div>
+      <div class="botones">
+        <button id="btnOn" class="b-on">Prender</button>
+        <button id="btnOff" class="b-off">Apagar</button>
+      </div>
+    </div>
+    <div class="card">
+      <pre id="log"></pre>
+    </div>
+    <button id="btnSalir" class="secundario">Desconectar</button>
+  </section>
+</main>
+
+<script>
+  // ---- Configuración del broker (estos datos NO son secretos) ----
+  const BROKER = "wss://z5bfcca9.ala.us-east-1.emqxsl.com:8084/mqtt"; // WebSocket con TLS
+  const TOPICO_CMD    = "casa/led1";         // la app publica ON/OFF acá
+  const TOPICO_ESTADO = "casa/led1/estado";  // la placa confirma el estado acá
+
+  let cliente = null;
+  const $ = id => document.getElementById(id);
+
+  function log(msg) {
+    const hora = new Date().toLocaleTimeString();
+    $("log").textContent = `[${hora}] ${msg}\n` + $("log").textContent;
+  }
+
+  function mostrarLed(estado) {
+    const on = estado === "ON";
+    $("led").classList.toggle("on", on);
+    $("ledTxt").textContent = on ? "LED prendido (confirmado por la placa)" : "LED apagado (confirmado por la placa)";
+  }
+
+  $("btnConectar").onclick = () => {
+    const usuario = $("usuario").value.trim();
+    const clave = $("clave").value;
+    if (!usuario || !clave) { $("errorLogin").textContent = "Completá usuario y contraseña."; return; }
+
+    $("btnConectar").disabled = true;
+    $("errorLogin").textContent = "";
+
+    // La contraseña solo vive en memoria mientras dura la conexión: no se guarda en ningún lado.
+    cliente = mqtt.connect(BROKER, {
+      username: usuario,
+      password: clave,
+      clientId: "app_" + Math.random().toString(16).slice(2, 10),
+      clean: true,
+      reconnectPeriod: 3000,
+      connectTimeout: 8000,
+    });
+    $("clave").value = "";
+
+    cliente.on("connect", () => {
+      $("login").classList.add("oculto");
+      $("panel").classList.remove("oculto");
+      $("puntoCon").className = "punto ok";
+      $("txtCon").textContent = "Conectado al broker (TLS)";
+      log("Conectado de forma segura al broker");
+      cliente.subscribe(TOPICO_ESTADO, { qos: 1 }, err => {
+        if (err) log("Error al suscribirse: " + err.message);
+        else log("Escuchando " + TOPICO_ESTADO);
+      });
+    });
+
+    cliente.on("message", (topico, payload) => {
+      const msg = payload.toString().trim().toUpperCase();
+      log(`Placa dice: ${msg}`);
+      if (topico === TOPICO_ESTADO) mostrarLed(msg);
+    });
+
+    cliente.on("reconnect", () => {
+      $("puntoCon").className = "punto";
+      $("txtCon").textContent = "Reconectando…";
+    });
+
+    cliente.on("error", err => {
+      log("Error: " + err.message);
+      if (!$("panel").classList.contains("oculto")) return;
+      $("errorLogin").textContent = "No se pudo conectar: revisá usuario y contraseña.";
+      $("btnConectar").disabled = false;
+      cliente.end(true);
+    });
+  };
+
+  function enviar(cmd) {
+    if (!cliente || !cliente.connected) { log("No hay conexión"); return; }
+    cliente.publish(TOPICO_CMD, cmd, { qos: 1 }, err => {
+      log(err ? "Error al enviar: " + err.message : `Enviado: ${cmd}`);
+    });
+  }
+
+  $("btnOn").onclick = () => enviar("ON");
+  $("btnOff").onclick = () => enviar("OFF");
+
+  $("btnSalir").onclick = () => {
+    if (cliente) cliente.end(true);
+    cliente = null;
+    $("panel").classList.add("oculto");
+    $("login").classList.remove("oculto");
+    $("btnConectar").disabled = false;
+  };
+</script>
+</body>
+</html>
