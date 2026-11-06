@@ -123,6 +123,8 @@
         </div>
       </div>
 
+      <div id="txtWifi" class="reloj-sub" style="text-align:left; margin-top:12px">&nbsp;</div>
+
       <div id="zonaReloj" class="oculto">
         <div id="reloj" class="reloj">00:00</div>
         <div class="reloj-sub">tiempo restante sin celular</div>
@@ -143,6 +145,12 @@
         <div id="ayudaIniciar" class="reloj-sub" style="margin-top:8px">Guardá el celu en la caja para habilitar</div>
       </div>
       <button id="btnTerminar" class="terminar oculto">Terminar detox</button>
+    </div>
+
+    <div class="card">
+      <div class="estado-con">Análisis de la conexión</div>
+      <button id="btnLatencia" class="secundario">Medir latencia (5 pruebas)</button>
+      <div id="txtLatencia" class="reloj-sub" style="margin-top:10px">&nbsp;</div>
     </div>
 
     <div class="card"><pre id="log"></pre></div>
@@ -188,8 +196,18 @@
     return String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
   }
 
+  function calidad(rssi) {
+    if (rssi >= -60) return "muy buena";
+    if (rssi >= -70) return "buena";
+    if (rssi >= -80) return "regular";
+    return "débil";
+  }
+
   function pintar() {
     if (!estado) return;
+    if (typeof estado.rssi === "number") {
+      $("txtWifi").textContent = `WiFi de la caja: canal ${estado.canal ?? "?"} · señal ${estado.rssi} dBm (${calidad(estado.rssi)})`;
+    }
     const guardado = estado.celu === "GUARDADO";
     $("icono").className = "icono " + (guardado ? "guardado" : "afuera");
     $("txtCelu").textContent = guardado ? "Celular guardado en la caja" : "Celular fuera de la caja";
@@ -260,6 +278,16 @@
       let datos;
       try { datos = JSON.parse(payload.toString()); }
       catch { log("Mensaje inválido ignorado"); return; }
+      if (datos.evento === "PONG" && !paquete.retain) {
+        const t0 = pings.get(datos.ping);
+        if (t0 !== undefined) {
+          pings.delete(datos.ping);
+          const rtt = Math.round(performance.now() - t0);
+          tiempos.push(rtt);
+          log(`Latencia ida y vuelta: ${rtt} ms`);
+          mostrarLatencia();
+        }
+      }
       estado = datos;
       restanteLocal = Number(datos.restante) || 0;
       // Los eventos se muestran solo si llegan en vivo (no el mensaje guardado del broker)
@@ -292,6 +320,30 @@
       log(err ? "Error al enviar: " + err.message : `Enviado: ${cmd}`);
     });
   }
+
+  // ---- Medición de latencia: app → broker → ESP32 → broker → app ----
+  const pings = new Map();
+  let tiempos = [];
+
+  function mostrarLatencia() {
+    if (!tiempos.length) return;
+    const prom = Math.round(tiempos.reduce((a, b) => a + b, 0) / tiempos.length);
+    $("txtLatencia").textContent =
+      `Promedio ${prom} ms · mínimo ${Math.min(...tiempos)} ms · máximo ${Math.max(...tiempos)} ms (${tiempos.length} pruebas)`;
+  }
+
+  $("btnLatencia").onclick = async () => {
+    if (!cliente || !cliente.connected) { log("No hay conexión"); return; }
+    tiempos = [];
+    $("txtLatencia").textContent = "Midiendo…";
+    for (let i = 0; i < 5; i++) {
+      const id = Date.now() % 1000000000 + i;
+      pings.set(id, performance.now());
+      cliente.publish(TOPICO_CMD, "PING:" + id, { qos: 1 });
+      await new Promise(r => setTimeout(r, 800));
+    }
+    if (!tiempos.length) $("txtLatencia").textContent = "La caja no respondió: ¿está conectada?";
+  };
 
   $("btnIniciar").onclick = () => enviar("INICIAR:" + minutosElegidos);
   $("btnTerminar").onclick = () => enviar("TERMINAR");
