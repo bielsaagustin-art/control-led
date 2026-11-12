@@ -216,6 +216,9 @@
 
   let cliente = null;
   let estado = null;          // último estado recibido de la placa
+  let cajaOnline = null;      // null = todavía no sabemos, true/false
+  let ultimaSenal = 0;        // Date.now() del último dato fresco de la caja
+  const SIN_SENAL_MS = 50000; // la caja manda un "latido" cada 20 s: 50 s sin nada = desconectada
   let restanteLocal = 0;      // segundos, para que el reloj corra entre reportes
   let minutosElegidos = 30;
   const $ = id => document.getElementById(id);
@@ -319,8 +322,39 @@
     return "débil";
   }
 
+  function haceCuanto(ms) {
+    const s = Math.round(ms / 1000);
+    if (s < 60) return `${s} s`;
+    const m = Math.round(s / 60);
+    if (m < 60) return `${m} min`;
+    const h = Math.round(m / 60);
+    return h < 48 ? `${h} h` : `${Math.round(h / 24)} días`;
+  }
+
+  // Caja apagada o sin WiFi: no mostramos datos viejos como si fueran actuales
+  function pintarDesconectada() {
+    $("icono").className = "icono afuera";
+    $("icono").textContent = "📴";
+    $("txtCelu").textContent = "Caja desconectada";
+    $("txtSalidas").textContent = ultimaSenal
+      ? `Última señal hace ${haceCuanto(Date.now() - ultimaSenal)}`
+      : "No hay datos recientes de la caja";
+    $("chipModo").className = "chip ALERTA";
+    $("chipModo").textContent = "SIN CONEXIÓN";
+    $("txtWifi").textContent = "WiFi de la caja: sin señal (¿está enchufada y con WiFi?)";
+    $("zonaReloj").classList.add("oculto");
+    $("zonaIniciar").classList.remove("oculto");
+    $("btnTerminar").classList.add("oculto");
+    $("btnIniciar").disabled = true;
+    $("ayudaIniciar").textContent = "La caja tiene que estar conectada para iniciar";
+    $("btnBuzzer").disabled = true;
+  }
+
   function pintar() {
+    if (cajaOnline === false) { pintarDesconectada(); return; }
     if (!estado) return;
+    $("icono").textContent = "📱";
+    if (!$("btnBuzzer").dataset.sonando) $("btnBuzzer").disabled = false;
     if (typeof estado.rssi === "number") {
       $("txtWifi").textContent = `WiFi de la caja: canal ${estado.canal ?? "?"} · señal ${estado.rssi} dBm (${calidad(estado.rssi)})`;
     }
@@ -345,8 +379,19 @@
   }
 
   // El reloj baja de a un segundo entre reportes (solo si el detox está corriendo)
+  // Vigilancia: si la caja deja de mandar su latido, se marca como desconectada
   setInterval(() => {
-    if (estado && estado.modo === "DETOX" && restanteLocal > 0) {
+    if (!cliente || !cliente.connected) return;
+    if (cajaOnline && Date.now() - ultimaSenal > SIN_SENAL_MS) {
+      cajaOnline = false;
+      agregarActividad("📴", "alerta", "La caja se desconectó", "Hace rato que no manda señales");
+      log("La caja dejó de responder");
+    }
+    if (cajaOnline === false) pintarDesconectada();   // actualiza el "hace X"
+  }, 5000);
+
+  setInterval(() => {
+    if (cajaOnline && estado && estado.modo === "DETOX" && restanteLocal > 0) {
       restanteLocal--;
       pintar();
     }
@@ -404,6 +449,43 @@
           mostrarLatencia();
         }
       }
+      // ¿La caja está viva?
+      const antes = cajaOnline;
+      if (datos.conexion === "OFFLINE") {
+        // Mensaje de "última voluntad" que publica el broker cuando la caja se cae
+        cajaOnline = false;
+        if (antes !== false) {
+          agregarActividad("📴", "alerta",
+            antes ? "La caja se desconectó" : "La caja está desconectada",
+            antes ? "Se apagó o perdió el WiFi" : "Enchufala y fijate que tenga WiFi");
+        }
+        log("La caja está desconectada");
+        pintar();
+        return;
+      }
+      if (paquete.retain) {
+        // Mensaje guardado en el broker: puede ser viejo, se mira su hora
+        // (sin hora válida no se puede saber: se toma como viejo hasta que llegue un latido)
+        const horaValida = datos.t > 1600000000;
+        const edad = horaValida ? Math.max(0, Date.now() - datos.t * 1000) : Infinity;
+        ultimaSenal = horaValida ? Date.now() - edad : 0;
+        cajaOnline = edad < SIN_SENAL_MS;
+      } else {
+        ultimaSenal = Date.now();
+        cajaOnline = true;
+      }
+      if (!cajaOnline) {
+        if (antes !== false) agregarActividad("📴", "alerta", "La caja está desconectada",
+          `Última señal hace ${haceCuanto(Date.now() - ultimaSenal)}`);
+        estado = datos;
+        pintar();
+        return;
+      }
+      if (antes === false) {
+        agregarActividad("📶", "ok", "La caja se conectó", "Volvió a mandar señales");
+        estado = null;   // así "registrarCambios" cuenta cómo está ahora
+      }
+
       if (datos.evento !== "PONG") registrarCambios(estado, datos, !paquete.retain);
       estado = datos;
       restanteLocal = Number(datos.restante) || 0;
@@ -469,13 +551,19 @@
   $("btnBuzzer").onclick = () => {
     enviar("BUZZER");
     $("btnBuzzer").disabled = true;
-    setTimeout(() => { $("btnBuzzer").disabled = false; }, 3000);
+    $("btnBuzzer").dataset.sonando = "1";
+    setTimeout(() => {
+      delete $("btnBuzzer").dataset.sonando;
+      $("btnBuzzer").disabled = cajaOnline === false;
+    }, 3000);
   };
 
   $("btnSalir").onclick = () => {
     if (cliente) cliente.end(true);
     cliente = null;
     estado = null;
+    cajaOnline = null;
+    ultimaSenal = 0;
     $("panel").classList.add("oculto");
     $("login").classList.remove("oculto");
     $("btnConectar").disabled = false;

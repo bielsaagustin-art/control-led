@@ -136,7 +136,14 @@ def publicar_estado(evento=None, ping=None):
     if cliente is None:
         return
     canal, rssi = info_wifi()
+    # Hora del mensaje (Unix, segundos) para que la app sepa si el estado es viejo.
+    # MicroPython en ESP32 cuenta desde el 2000: se pasa a la cuenta desde 1970.
+    t = time.time()
+    if t < 1500000000:
+        t += 946684800
     datos = {
+        "conexion": "ONLINE",
+        "t": t,
         "celu": "GUARDADO" if celu_guardado else "AFUERA",
         "modo": modo,
         "restante": max(0, restante_ms // 1000),
@@ -272,9 +279,12 @@ def conectar_mqtt():
         port=PUERTO,
         user=USUARIO,
         password=secretos.MQTT_PASS,
-        keepalive=60,
+        keepalive=30,
         ssl=contexto_tls(),
     )
+    # "Ultima voluntad" (Last Will): si la placa se apaga o pierde el WiFi, el broker
+    # nota que dejo de responder (~45 s) y publica esto solo. Asi la app no muestra datos viejos.
+    c.set_last_will(TOPICO_ESTADO, b'{"conexion":"OFFLINE"}', retain=True)
     c.set_callback(al_recibir)
     c.connect()
     c.subscribe(TOPICO_CMD)
@@ -331,9 +341,11 @@ while True:
                 publicar_estado()
                 ultimo_reporte = ahora
 
-            # Cada 30 s: mantiene viva la conexion y muestra el estado del enlace en la consola
-            if time.ticks_diff(ahora, ultimo_ping) > 30000:
+            # Cada 20 s: "latido" a la app (estado + senal WiFi), mantiene viva la conexion
+            # y muestra el estado del enlace en la consola
+            if time.ticks_diff(ahora, ultimo_ping) > 20000:
                 cliente.ping()
+                publicar_estado()
                 canal, rssi = info_wifi()
                 print("Monitor WiFi | canal:", canal, "| senal:", rssi, "dBm | broker: conectado (TLS)")
                 ultimo_ping = ahora
