@@ -481,10 +481,7 @@
         pintar();
         return;
       }
-      if (antes === false) {
-        agregarActividad("📶", "ok", "La caja se conectó", "Volvió a mandar señales");
-        estado = null;   // así "registrarCambios" cuenta cómo está ahora
-      }
+      if (antes === false) estado = null;   // así "registrarCambios" anota "Caja conectada" y cómo está ahora
 
       if (datos.evento !== "PONG") registrarCambios(estado, datos, !paquete.retain);
       estado = datos;
