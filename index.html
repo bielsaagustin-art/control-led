@@ -87,7 +87,12 @@
   /* ---- Actividad (lo que va pasando en la caja) ---- */
   .act-titulo { display: flex; justify-content: space-between; align-items: center; }
   .act-titulo button { width: auto; margin: 0; padding: 4px 10px; font-size: .75rem; font-weight: 500; }
-  #actividad { list-style: none; margin: 12px 0 0; padding: 0; max-height: 320px; overflow-y: auto; }
+  #actividad {
+    list-style: none; margin: 12px 0 0; padding: 0 8px 0 0; max-height: 320px; overflow-y: auto;
+    scrollbar-width: thin; scrollbar-color: var(--borde) transparent;
+  }
+  #actividad::-webkit-scrollbar { width: 6px; }
+  #actividad::-webkit-scrollbar-thumb { background: var(--borde); border-radius: 3px; }
   #actividad li {
     display: flex; gap: 12px; align-items: flex-start; padding: 10px 0;
     border-top: 1px solid var(--borde); animation: entra .35s ease-out;
