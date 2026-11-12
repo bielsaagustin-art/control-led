@@ -15,7 +15,7 @@ import network
 import ntptime
 import machine
 import ubinascii
-from machine import Pin
+from machine import Pin, PWM
 from umqtt.simple import MQTTClient
 
 import secretos  # contrasenas: archivo aparte, nunca se comparte
@@ -46,7 +46,9 @@ SIMULAR_SENSOR = False
 led_conexion = Pin(2, Pin.OUT, value=0)
 
 sensor = Pin(PIN_SENSOR, Pin.IN, Pin.PULL_UP)
-verde = Pin(PIN_VERDE, Pin.OUT, value=0)
+# El verde va por PWM para poder variar el brillo: fijo = celu guardado, "respirando" = detox en curso
+verde = PWM(Pin(PIN_VERDE), freq=1000)
+verde.duty_u16(0)
 rojo = Pin(PIN_ROJO, Pin.OUT, value=0)
 buzzer = Pin(PIN_BUZZER, Pin.OUT, value=1 - BUZZER_SUENA_EN)
 
@@ -56,6 +58,8 @@ celu_guardado = False
 restante_ms = 0
 meta_s = 0
 salidas = 0             # cuantas veces sacaron el celu durante el detox
+BUZZER_APP_MS = 3000    # duracion del buzzer pedido desde la app
+buzzer_hasta = None     # ticks_ms hasta cuando suena el buzzer pedido desde la app
 cliente = None
 wlan = None             # interfaz WiFi (modo estacion = cliente de un access point)
 
@@ -88,20 +92,36 @@ def leer_sensor():
     return sensor.value() == SENSOR_DETECTA_EN
 
 
+def brillo_respiracion(ahora, periodo_ms=2000):
+    """Brillo del LED que sube y baja suave (efecto 'respirar'), 0..65535."""
+    fase = (ahora % periodo_ms) / periodo_ms          # 0..1
+    tri = 1 - abs(2 * fase - 1)                       # 0 -> 1 -> 0
+    return int(1500 + 64000 * tri * tri)             # nunca se apaga del todo
+
+
 def actualizar_salidas_fisicas(ahora):
+    global buzzer_hasta
     if modo == "ALERTA":
         parpadeo = (ahora // 300) % 2 == 0
         rojo.value(1 if parpadeo else 0)
-        verde.value(0)
-        buzz(parpadeo)
+        verde.duty_u16(0)
+        sonar = parpadeo
     elif modo == "DETOX":
-        verde.value(1)
+        verde.duty_u16(brillo_respiracion(ahora))     # detox corriendo: verde "respirando"
         rojo.value(0)
-        buzz(False)
+        sonar = False
     else:  # LIBRE
-        verde.value(1 if celu_guardado else 0)
+        verde.duty_u16(65535 if celu_guardado else 0)  # celu guardado: verde fijo
         rojo.value(0)
-        buzz(False)
+        sonar = False
+
+    # Buzzer pedido desde la app: suena fijo durante BUZZER_APP_MS
+    if buzzer_hasta is not None:
+        if time.ticks_diff(buzzer_hasta, ahora) > 0:
+            sonar = True
+        else:
+            buzzer_hasta = None
+    buzz(sonar)
 
 
 def info_wifi():
@@ -152,7 +172,7 @@ def al_cambiar_celu(guardado):
 
 
 def al_recibir(topico, msg):
-    global modo, restante_ms, meta_s, salidas
+    global modo, restante_ms, meta_s, salidas, buzzer_hasta
     cmd = msg.decode().strip().upper()
     print("Comando recibido:", cmd)
 
@@ -180,6 +200,11 @@ def al_recibir(topico, msg):
         n = cmd.split(":", 1)[1]
         if n.isdigit() and len(n) <= 10:
             publicar_estado("PONG", int(n))
+
+    elif cmd == "BUZZER":
+        # Hacer sonar el buzzer 3 s desde la app (no bloquea: lo apaga el bucle principal)
+        buzzer_hasta = time.ticks_add(time.ticks_ms(), BUZZER_APP_MS)
+        publicar_estado("BUZZER")
 
     elif cmd == "TERMINAR":
         modo = "LIBRE"
@@ -318,6 +343,7 @@ while True:
     except Exception as e:
         print("Error:", e, "- reintento en 5 s")
         led_conexion.value(0)   # apagado: se corto algo, reintentando
+        buzzer_hasta = None
         buzz(False)
         try:
             cliente.disconnect()

@@ -148,6 +148,11 @@
     </div>
 
     <div class="card">
+      <div class="estado-con">Buzzer de la caja</div>
+      <button id="btnBuzzer" class="secundario">🔔 Hacer sonar (3 s)</button>
+    </div>
+
+    <div class="card">
       <div class="estado-con">Análisis de la conexión</div>
       <button id="btnLatencia" class="secundario">Medir latencia (5 pruebas)</button>
       <div id="txtLatencia" class="reloj-sub" style="margin-top:10px">&nbsp;</div>
@@ -177,6 +182,7 @@
     NO_HAY_CELU:       ["warn",   "Primero guardá el celu en la caja: el sensor tiene que detectarlo."],
     DETOX_INICIADO:    ["info",   "Detox iniciado. ¡A desconectarse!"],
     DETOX_CANCELADO:   ["warn",   "Detox terminado antes de tiempo."],
+    BUZZER:            ["info",   "🔔 La caja está sonando (3 s)."],
   };
 
   function log(msg) {
@@ -347,6 +353,13 @@
 
   $("btnIniciar").onclick = () => enviar("INICIAR:" + minutosElegidos);
   $("btnTerminar").onclick = () => enviar("TERMINAR");
+
+  // Buzzer 3 s: el botón se bloquea mientras suena para no mandar órdenes repetidas
+  $("btnBuzzer").onclick = () => {
+    enviar("BUZZER");
+    $("btnBuzzer").disabled = true;
+    setTimeout(() => { $("btnBuzzer").disabled = false; }, 3000);
+  };
 
   $("btnSalir").onclick = () => {
     if (cliente) cliente.end(true);
