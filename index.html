@@ -84,6 +84,33 @@
   .aviso.info { display: block; background: #12331f; border-color: var(--ok); color: #bff3d3; }
   .aviso.warn { display: block; background: #3a3015; border-color: var(--aviso); color: #fbe7b0; }
 
+  /* ---- Actividad (lo que va pasando en la caja) ---- */
+  .act-titulo { display: flex; justify-content: space-between; align-items: center; }
+  .act-titulo button { width: auto; margin: 0; padding: 4px 10px; font-size: .75rem; font-weight: 500; }
+  #actividad { list-style: none; margin: 12px 0 0; padding: 0; max-height: 320px; overflow-y: auto; }
+  #actividad li {
+    display: flex; gap: 12px; align-items: flex-start; padding: 10px 0;
+    border-top: 1px solid var(--borde); animation: entra .35s ease-out;
+  }
+  #actividad li:first-child { border-top: 0; }
+  .act-ico {
+    width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center;
+    font-size: 1.05rem; flex-shrink: 0; background: var(--bg); border: 1px solid var(--borde);
+  }
+  .act-ico.ok     { background: #12331f; border-color: #1f5a36; }
+  .act-ico.alerta { background: #3a1717; border-color: #6b2a2a; }
+  .act-ico.warn   { background: #3a3015; border-color: #6b5a24; }
+  .act-ico.azul   { background: #18213f; border-color: #2c3b70; }
+  .act-txt { flex: 1; min-width: 0; }
+  .act-txt strong { display: block; font-size: .92rem; font-weight: 600; }
+  .act-txt span { color: var(--sub); font-size: .78rem; }
+  .act-hora { color: var(--sub); font-size: .72rem; font-variant-numeric: tabular-nums; white-space: nowrap; padding-top: 2px; }
+  .act-vacio { color: var(--sub); font-size: .85rem; text-align: center; padding: 16px 0 4px; border: 0 !important; }
+  @keyframes entra { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+
+  details.tecnico summary { cursor: pointer; color: var(--sub); font-size: .8rem; }
+  details.tecnico[open] summary { margin-bottom: 10px; }
+
   #log {
     font-family: ui-monospace, Consolas, monospace; font-size: .75rem; color: var(--sub);
     max-height: 120px; overflow-y: auto; white-space: pre-wrap; margin: 0;
@@ -158,7 +185,20 @@
       <div id="txtLatencia" class="reloj-sub" style="margin-top:10px">&nbsp;</div>
     </div>
 
-    <div class="card"><pre id="log"></pre></div>
+    <div class="card">
+      <div class="act-titulo">
+        <div class="estado-con">Actividad de la caja</div>
+        <button id="btnLimpiar" class="secundario">Limpiar</button>
+      </div>
+      <ul id="actividad"><li class="act-vacio">Todavía no pasó nada.</li></ul>
+    </div>
+
+    <div class="card">
+      <details class="tecnico">
+        <summary>Registro técnico (MQTT)</summary>
+        <pre id="log"></pre>
+      </details>
+    </div>
     <button id="btnSalir" class="secundario">Desconectar</button>
   </section>
 </main>
@@ -188,6 +228,71 @@
   function log(msg) {
     const hora = new Date().toLocaleTimeString();
     $("log").textContent = `[${hora}] ${msg}\n` + $("log").textContent;
+  }
+
+  // ---- Actividad: lista linda de lo que va pasando ----
+  // tipo: ok / alerta / warn / azul (color del ícono)
+  const ACTIVIDAD = {
+    DETOX_INICIADO:    ["🧘", "ok",     "Detox iniciado",            d => `Meta: ${fmtLargo(d.meta)} sin celular`],
+    SACARON_CELU:      ["⚠️", "alerta", "Sacaron el celu de la caja", d => `Detox en pausa · van ${d.salidas} ${d.salidas === 1 ? "vez" : "veces"}`],
+    CELU_DEVUELTO:     ["📥", "ok",     "El celu volvió a la caja",  d => `El detox sigue · quedan ${fmt(d.restante)}`],
+    OBJETIVO_CUMPLIDO: ["🎉", "ok",     "¡Objetivo cumplido!",        d => d.meta ? `${fmtLargo(d.meta)} sin celular` : "Terminó el tiempo"],
+    DETOX_CANCELADO:   ["⏹️", "warn",   "Detox terminado antes de tiempo", () => "Se canceló desde la app"],
+    NO_HAY_CELU:       ["🚫", "warn",   "No se pudo iniciar",         () => "El sensor no detecta el celu en la caja"],
+    BUZZER:            ["🔔", "azul",   "Sonó el buzzer",             () => "3 segundos, pedido desde la app"],
+  };
+  let actividadVacia = true;
+
+  function fmtLargo(seg) {
+    seg = Number(seg) || 0;
+    if (seg < 60) return `${seg} s`;
+    const m = Math.round(seg / 60);
+    return m === 1 ? "1 minuto" : `${m} minutos`;
+  }
+
+  function agregarActividad(icono, tipo, titulo, detalle) {
+    const ul = $("actividad");
+    if (actividadVacia) { ul.innerHTML = ""; actividadVacia = false; }
+    const li = document.createElement("li");
+    const hora = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    li.innerHTML = `<div class="act-ico ${tipo}"></div>
+      <div class="act-txt"><strong></strong><span></span></div>
+      <div class="act-hora"></div>`;
+    li.querySelector(".act-ico").textContent = icono;
+    li.querySelector("strong").textContent = titulo;
+    li.querySelector("span").textContent = detalle || "";
+    li.querySelector(".act-hora").textContent = hora;
+    ul.prepend(li);
+    while (ul.children.length > 40) ul.lastChild.remove();
+  }
+
+  $("btnLimpiar").onclick = () => {
+    $("actividad").innerHTML = '<li class="act-vacio">Todavía no pasó nada.</li>';
+    actividadVacia = true;
+  };
+
+  // Compara el estado nuevo con el anterior y anota lo que cambió
+  function registrarCambios(previo, datos, enVivo) {
+    const ev = enVivo ? datos.evento : null;
+    if (ev && ACTIVIDAD[ev]) {
+      const [ico, tipo, titulo, det] = ACTIVIDAD[ev];
+      agregarActividad(ico, tipo, titulo, det(datos));
+    }
+    if (!previo) {
+      // Primer mensaje al conectarse: cómo está la caja ahora
+      const guardado = datos.celu === "GUARDADO";
+      const extra = datos.modo === "DETOX" ? ` · detox en curso, quedan ${fmt(datos.restante)}`
+                  : datos.modo === "ALERTA" ? " · detox en pausa" : "";
+      agregarActividad("📦", "azul", "Caja conectada",
+        (guardado ? "El celu está guardado" : "El celu está afuera") + extra);
+      return;
+    }
+    // Cambios del sensor que no vienen con un evento propio (fuera del detox)
+    const eventosDelSensor = ["SACARON_CELU", "CELU_DEVUELTO"];
+    if (previo.celu !== datos.celu && !eventosDelSensor.includes(ev)) {
+      if (datos.celu === "GUARDADO") agregarActividad("📱", "ok", "Celu guardado", "El sensor lo detecta en la caja");
+      else agregarActividad("👋", "warn", "Celu fuera de la caja", "El sensor ya no lo detecta");
+    }
   }
 
   function mostrarAviso(tipo, texto) {
@@ -294,6 +399,7 @@
           mostrarLatencia();
         }
       }
+      if (datos.evento !== "PONG") registrarCambios(estado, datos, !paquete.retain);
       estado = datos;
       restanteLocal = Number(datos.restante) || 0;
       // Los eventos se muestran solo si llegan en vivo (no el mensaje guardado del broker)
